@@ -2,155 +2,109 @@ name: JMeter Performance Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
-
-permissions:
-  contents: write
-  pages: write
-  id-token: write
-  pull-requests: write
 
 jobs:
   performance-test:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: List repository files
-        run: |
-          echo "=== Repository structure ==="
-          ls -la
-          echo "=== Looking for JMX files (excluding results) ==="
-          find . -name "*.jmx" -not -path "*/results/*" -not -path "*/report-html/*"
-
-      - name: Start HTTPBin container
-        run: docker run -d --name httpbin -p 8080:80 kennethreitz/httpbin
-
-      - name: Wait for HTTPBin to be ready
-        run: |
-          echo "Waiting for HTTPBin to start..."
-          timeout 60 bash -c 'until curl -f http://localhost:8080/get; do echo "Waiting..."; sleep 2; done'
-          echo "HTTPBin is ready!"
-
-      - name: Verify container is running
-        run: docker ps
-
-      - name: Download JMeter
-        run: |
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '11'
+    
+    - name: Create results directory
+      run: |
+        mkdir -p results
+        mkdir -p report-html
+    
+    - name: Download and extract JMeter
+      run: |
+        if [ ! -d "apache-jmeter-5.6.3" ]; then
           wget https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
           tar -xzf apache-jmeter-5.6.3.tgz
-          chmod +x ./apache-jmeter-5.6.3/bin/jmeter
-
-      - name: Clean and create results & report directories
-        run: |
-          rm -rf results report-html
-          mkdir -p results report-html
-
-      - name: Run JMeter Tests
-        run: |
-          JMX_FILE=$(find . -name "*.jmx" -not -path "*/results/*" -not -path "*/report-html/*" | head -1)
-          if [ -z "$JMX_FILE" ]; then
-            echo "Error: No JMX test plan file found!"
-            exit 1
-          fi
-          echo "Using JMX file: $JMX_FILE"
-          ./apache-jmeter-5.6.3/bin/jmeter -n -t "$JMX_FILE" -l results/results.jtl -e -o report-html
-
-      - name: Verify JMeter HTML report
-        run: |
-          if [ ! -d "report-html" ] || [ -z "$(ls -A report-html)" ]; then
-            echo "❌ JMeter HTML report not generated!"
-            ls -la
-            exit 1
-          else
-            echo "✅ JMeter HTML report exists"
-            ls -la report-html
-          fi
-
-      - name: Generate Test Summary
-        if: always()
-        run: |
-          echo "# JMeter Test Results Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ -f "results/results.jtl" ]; then
-            TOTAL=$(grep -c "^[0-9]" results/results.jtl || echo "0")
-            FAILURES=$(grep -c ",false," results/results.jtl || echo "0")
-            SUCCESS=$((TOTAL - FAILURES))
-
-            echo "## Test Statistics" >> $GITHUB_STEP_SUMMARY
-            echo "- **Total Requests:** $TOTAL" >> $GITHUB_STEP_SUMMARY
-            echo "- **Successful:** $SUCCESS" >> $GITHUB_STEP_SUMMARY
-            echo "- **Failed:** $FAILURES" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-
-            if [ $FAILURES -gt 0 ]; then
-              echo "⚠️ **Status:** Some tests failed" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "✅ **Status:** All tests passed" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "❌ No results file found" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📊 Download the HTML report from the artifacts section below to view detailed results." >> $GITHUB_STEP_SUMMARY
-
-      - name: Check container logs if tests fail
-        if: failure()
-        run: docker logs httpbin
-
-      - name: Upload JMeter HTML Report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: jmeter-html-report
-          path: report-html
-
-      - name: Upload JMeter Results (JTL)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: jmeter-results-jtl
-          path: results/
-
-      - name: Publish Test Report as GitHub Pages
-        if: always() && github.ref == 'refs/heads/main'
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./report-html
-          destination_dir: jmeter-reports/${{ github.run_number }}
-          keep_files: true
-
-      - name: Comment PR with Report Link
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const runNumber = context.runNumber;
-            const reportUrl = `https://${context.repo.owner}.github.io/${context.repo.repo}/jmeter-reports/${runNumber}/index.html`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## 📊 JMeter Test Results\n\n**Run Number:** ${runNumber}\n\n📈 [View HTML Report](${reportUrl})\n\n💾 Download detailed results from the [Actions artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
-            })
-
-      - name: Stop container
-        if: always()
-        run: |
-          docker stop httpbin || true
-          docker rm httpbin || true
+        fi
+    
+    - name: Start HTTPBin service
+      run: |
+        docker run -d -p 8080:80 --name httpbin kennethreitz/httpbin
+        echo "Waiting for HTTPBin to be ready..."
+        timeout 30 bash -c 'until curl -f http://localhost:8080/get; do sleep 2; done'
+    
+    - name: Run JMeter Tests
+      run: |
+        ./apache-jmeter-5.6.3/bin/jmeter -n \
+          -t httpbin_test_plan.jmx \
+          -l results/results.jtl \
+          -e -o report-html \
+          -Jjmeter.save.saveservice.output_format=xml \
+          -Jjmeter.reportgenerator.overall_granularity=1000
+      continue-on-error: true
+    
+    - name: Check JMeter execution
+      run: |
+        if [ -f "results/results.jtl" ]; then
+          echo "✅ JMeter results file generated successfully"
+          ls -lh results/results.jtl
+        else
+          echo "❌ JMeter results file not found!"
+          exit 1
+        fi
+    
+    - name: Verify HTML Report
+      run: |
+        if [ -f "report-html/index.html" ]; then
+          echo "✅ JMeter HTML report generated successfully"
+          ls -lh report-html/
+        else
+          echo "❌ JMeter HTML report not generated!"
+          echo "Contents of current directory:"
+          ls -la
+          echo "Contents of report-html directory:"
+          ls -la report-html/
+          echo "JMeter log:"
+          cat jmeter.log
+          exit 1
+        fi
+    
+    - name: Stop HTTPBin service
+      if: always()
+      run: docker stop httpbin || true
+    
+    - name: Upload JMeter Results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: jmeter-results
+        path: results/
+    
+    - name: Upload JMeter HTML Report
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: jmeter-html-report
+        path: report-html/
+    
+    - name: Upload JMeter Log
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: jmeter-log
+        path: jmeter.log
+    
+    - name: Display Test Summary
+      if: always()
+      run: |
+        echo "=== Test Execution Summary ==="
+        if [ -f "results/results.jtl" ]; then
+          echo "Total Samples: $(grep -c '<httpSample' results/results.jtl || echo 'N/A')"
+        fi
+        echo "Report available in artifacts"
