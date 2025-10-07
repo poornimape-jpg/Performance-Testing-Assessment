@@ -33,6 +33,20 @@ jobs:
           tar -xzf apache-jmeter-5.6.3.tgz
         fi
 
+    - name: Create users.csv (if needed)
+      run: |
+        if ! [ -f "users.csv" ]; then
+          echo "Creating users.csv file..."
+          cat > users.csv << 'EOF'
+        username,password,email
+        user1,pass123,user1@example.com
+        user2,pass456,user2@example.com
+        user3,pass789,user3@example.com
+        user4,pass101,user4@example.com
+        user5,pass112,user5@example.com
+        EOF
+        fi
+
     - name: Start HTTPBin service
       run: |
         docker run -d -p 8080:80 --name httpbin kennethreitz/httpbin
