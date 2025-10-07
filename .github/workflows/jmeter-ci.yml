@@ -38,40 +38,54 @@ jobs:
         docker run -d -p 8080:80 --name httpbin kennethreitz/httpbin
         echo "Waiting for HTTPBin to be ready..."
         timeout 30 bash -c 'until curl -f http://localhost:8080/get; do sleep 2; done'
+        echo "✅ HTTPBin is ready!"
+        curl -v http://localhost:8080/get
 
     - name: Run JMeter Tests
       run: |
+        echo "Starting JMeter test execution..."
         ./apache-jmeter-5.6.3/bin/jmeter -n \
           -t httpbin_test_plan.jmx \
           -l results/results.csv \
-          -e -o report-html \
-          -Jjmeter.save.saveservice.output_format=csv \
-          -Jjmeter.reportgenerator.overall_granularity=1000
-      continue-on-error: true
+          -j jmeter.log \
+          -Jjmeter.save.saveservice.output_format=csv
+        
+        echo "JMeter test completed. Checking results..."
+        if [ -f "results/results.csv" ]; then
+          SAMPLE_COUNT=$(wc -l < results/results.csv)
+          echo "Sample count (including header): $SAMPLE_COUNT"
+          
+          if [ "$SAMPLE_COUNT" -le 1 ]; then
+            echo "❌ No samples collected! Check test plan configuration."
+            cat jmeter.log
+            exit 1
+          fi
+        fi
+      continue-on-error: false
 
     - name: Check JMeter execution
       run: |
         if [ -f "results/results.csv" ]; then
           echo "✅ JMeter results file generated successfully"
           ls -lh results/results.csv
+          echo "First 10 lines of results:"
+          head -10 results/results.csv
         else
           echo "❌ JMeter results file not found!"
           exit 1
         fi
-
-    - name: Verify HTML Report
+    
+    - name: Generate HTML Report
       run: |
+        echo "Generating HTML report from results..."
+        ./apache-jmeter-5.6.3/bin/jmeter -g results/results.csv \
+          -o report-html \
+          -Jjmeter.reportgenerator.overall_granularity=1000
+        
         if [ -f "report-html/index.html" ]; then
-          echo "✅ JMeter HTML report generated successfully"
-          ls -lh report-html/
+          echo "✅ HTML report generated successfully"
         else
-          echo "❌ JMeter HTML report not generated!"
-          echo "Contents of current directory:"
-          ls -la
-          echo "Contents of report-html directory:"
-          ls -la report-html/
-          echo "JMeter log:"
-          cat jmeter.log
+          echo "❌ Failed to generate HTML report"
           exit 1
         fi
 
